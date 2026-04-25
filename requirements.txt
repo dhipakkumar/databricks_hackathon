@@ -1,1 +1,10 @@
 streamlit
+torch
+torchvision
+xgboost>=2.0
+scikit-learn
+numpy
+Pillow
+matplotlib
+seaborn
+joblib
