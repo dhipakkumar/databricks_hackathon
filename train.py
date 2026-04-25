@@ -17,7 +17,7 @@ import joblib
 DATA_DIR   = Path("data")          # change if your data lives elsewhere
 TRAIN_DIR  = DATA_DIR / "Training"
 TEST_DIR   = DATA_DIR / "Testing"
-MODEL_DIR = Path("/tmp/models")
+MODEL_DIR = Path("models")
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
 IMG_SIZE   = 224
@@ -120,7 +120,7 @@ def main():
     )
 
     joblib.dump(clf, MODEL_DIR / "xgb_brain_tumor.pkl")
-    print("  Model saved to models/xgb_brain_tumor.pkl")
+    print("  Model saved to /tmp/models/xgb_brain_tumor.pkl")
 
     # ── Evaluation ───────────────────────────────────────────────────────────
     y_pred = clf.predict(X_test)
