@@ -381,7 +381,7 @@ st.markdown("""
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-MODEL_PATH = Path("models") / "handcrafted_xgb_brain_tumor.pkl"
+MODEL_PATH = Path("/tmp/brain_tumor_models/xgb_brain_tumor_delta.pkl")
 IMG_SIZE   = 224
 CLASSES    = ["glioma_tumor", "meningioma_tumor", "no_tumor", "pituitary_tumor"]
 
@@ -391,101 +391,7 @@ CLASS_META = {
     "no_tumor":         {"label": "No Tumor Detected", "color": "#34d399", "hex_bg": "#0f2a20"},
     "pituitary_tumor":  {"label": "Pituitary Tumor",   "color": "#fbbf24", "hex_bg": "#2a2000"},
 }
-TEXT = {
-    "English": {
-        "patient_info": "Patient Information",
-        "history_title": "Prior Medical History",
-        "full_name": "Full Name",
-        "age": "Age",
-        "sex": "Sex",
-        "email": "Email",
-        "address": "Address",
-        "history": "History",
-        "classifier": "🔬 Classifier",
-        "about": "📖 About Tumors",
-        "upload_title": "MRI Scan Upload",
-        "upload_mri": "Upload MRI",
-        "drop_scan": "Drop an MRI scan here",
-        "results_here": "Results will appear here",
-        "upload_begin": "Upload a scan to begin analysis",
-        "analysing": "Analysing scan…",
-        "ai_diagnosis": "AI Diagnosis",
-        "top_predictions": "Top Predictions",
-        "full_breakdown": "▸ Full confidence breakdown (all 4 classes)",
-        "highlight_title": "Highlighted Suspicious Bright Region",
-        "original_mri": "Original MRI",
-        "highlighted_region": "Highlighted brighter region",
-        "bright_note": "Highlighted area = pixels significantly brighter than surrounding brain tissue.",
-        "about_intro": "Educational reference for the four categories recognised by this classifier.",
-        "symptoms": "Symptoms",
-        "risk_factors": "Risk Factors",
-        "treatment": "Treatment",
-        "prognosis": "Prognosis",
-        "disclaimer": "This tool is intended for educational and research purposes only. It must NOT be used as a substitute for professional medical advice, clinical diagnosis, or treatment decisions. Always consult a qualified physician or radiologist.",
-    },
-    "Hindi": {
-        "patient_info": "रोगी की जानकारी",
-        "history_title": "पूर्व चिकित्सा इतिहास",
-        "full_name": "पूरा नाम",
-        "age": "उम्र",
-        "sex": "लिंग",
-        "email": "ईमेल",
-        "address": "पता",
-        "history": "इतिहास",
-        "classifier": "🔬 वर्गीकरण",
-        "about": "📖 ट्यूमर के बारे में",
-        "upload_title": "MRI स्कैन अपलोड",
-        "upload_mri": "MRI अपलोड करें",
-        "drop_scan": "यहाँ MRI स्कैन डालें",
-        "results_here": "परिणाम यहाँ दिखेंगे",
-        "upload_begin": "विश्लेषण शुरू करने के लिए स्कैन अपलोड करें",
-        "analysing": "स्कैन का विश्लेषण हो रहा है…",
-        "ai_diagnosis": "AI निदान",
-        "top_predictions": "शीर्ष अनुमान",
-        "full_breakdown": "▸ सभी 4 वर्गों का पूर्ण confidence breakdown",
-        "highlight_title": "संदिग्ध चमकीला क्षेत्र",
-        "original_mri": "मूल MRI",
-        "highlighted_region": "चमकीला क्षेत्र हाइलाइट किया गया",
-        "bright_note": "हाइलाइट किया गया भाग आसपास के brain tissue से ज्यादा चमकीले pixels दिखाता है.",
-        "about_intro": "इस classifier द्वारा पहचानी जाने वाली चार categories की educational जानकारी.",
-        "symptoms": "लक्षण",
-        "risk_factors": "जोखिम कारक",
-        "treatment": "उपचार",
-        "prognosis": "पूर्वानुमान",
-        "disclaimer": "यह tool केवल educational और research purposes के लिए है। इसे professional medical advice, diagnosis या treatment decision का substitute न मानें। हमेशा qualified physician या radiologist से सलाह लें।",
-    },
-    "Tamil": {
-        "patient_info": "நோயாளர் தகவல்",
-        "history_title": "முந்தைய மருத்துவ வரலாறு",
-        "full_name": "முழு பெயர்",
-        "age": "வயது",
-        "sex": "பாலினம்",
-        "email": "மின்னஞ்சல்",
-        "address": "முகவரி",
-        "history": "வரலாறு",
-        "classifier": "🔬 வகைப்படுத்தி",
-        "about": "📖 கட்டிகள் பற்றி",
-        "upload_title": "MRI ஸ்கேன் பதிவேற்றம்",
-        "upload_mri": "MRI பதிவேற்றவும்",
-        "drop_scan": "MRI ஸ்கேன் இங்கே விடவும்",
-        "results_here": "முடிவுகள் இங்கே தோன்றும்",
-        "upload_begin": "ஆய்வு தொடங்க ஸ்கேன் பதிவேற்றவும்",
-        "analysing": "ஸ்கேன் ஆய்வு செய்யப்படுகிறது…",
-        "ai_diagnosis": "AI நோயறிதல்",
-        "top_predictions": "முக்கிய கணிப்புகள்",
-        "full_breakdown": "▸ அனைத்து 4 வகைகளின் confidence breakdown",
-        "highlight_title": "சந்தேகமான பிரகாசமான பகுதி",
-        "original_mri": "அசல் MRI",
-        "highlighted_region": "பிரகாசமான பகுதி குறிக்கப்பட்டது",
-        "bright_note": "குறிக்கப்பட்ட பகுதி சுற்றியுள்ள brain tissue-ஐ விட அதிகமாக பிரகாசிக்கும் pixels-ஐ காட்டுகிறது.",
-        "about_intro": "இந்த classifier அடையாளம் காணும் நான்கு categories பற்றிய educational reference.",
-        "symptoms": "அறிகுறிகள்",
-        "risk_factors": "ஆபத்து காரணிகள்",
-        "treatment": "சிகிச்சை",
-        "prognosis": "முன்னறிவு",
-        "disclaimer": "இந்த tool educational மற்றும் research purposes-க்காக மட்டுமே. Professional medical advice, diagnosis அல்லது treatment decision-க்கு பதிலாக பயன்படுத்தக்கூடாது. Qualified physician அல்லது radiologist-ஐ அணுகவும்.",
-    },
-}
+
 TUMOR_DATA = {
     "glioma_tumor": {
         "description": (
@@ -975,9 +881,6 @@ def generate_pdf_report(
 
 # ── Sidebar — Patient Info ────────────────────────────────────────────────────
 with st.sidebar:
-    language = st.selectbox("Language / भाषा / மொழி", ["English", "Hindi", "Tamil"])
-    T = TEXT[language]
-    st.markdown("---")
     st.markdown(
         '<p style="font-family:\'Space Mono\',monospace;font-size:0.75rem;'
         'color:#484f58;letter-spacing:0.12em;text-transform:uppercase;'
@@ -1319,3 +1222,4 @@ with tab_about:
       Always consult a qualified medical professional.
     </div>
     """, unsafe_allow_html=True)
+

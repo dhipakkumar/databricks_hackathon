@@ -1,157 +1,256 @@
+# Databricks Brain Tumor Classifier with Spark + Delta
+# Works with Workspace files, not DBFS FileStore
+
+import io
+import os
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from pathlib import Path
+import pandas as pd
 from PIL import Image
 
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, models
 
-from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
 import xgboost as xgb
 import joblib
 
-# ── Config ──────────────────────────────────────────────────────────────────
-DATA_DIR   = Path("data")          # change if your data lives elsewhere
-TRAIN_DIR  = DATA_DIR / "Training"
-TEST_DIR   = DATA_DIR / "Testing"
-MODEL_DIR = Path("models")
-MODEL_DIR.mkdir(parents=True, exist_ok=True)
+from sklearn.metrics import accuracy_score, classification_report
 
-IMG_SIZE   = 224
-BATCH_SIZE = 32
-DEVICE     = "cuda" if torch.cuda.is_available() else "cpu"
-CLASSES    = ["glioma_tumor", "meningioma_tumor", "no_tumor", "pituitary_tumor"]
-
-# ── Dataset ──────────────────────────────────────────────────────────────────
-class BrainTumorDataset(Dataset):
-    def __init__(self, root_dir, transform=None):
-        self.samples = []
-        self.transform = transform
-        for label, cls in enumerate(CLASSES):
-            cls_dir = Path(root_dir) / cls
-            for img_path in cls_dir.glob("*"):
-                if img_path.suffix.lower() in {".jpg", ".jpeg", ".png"}:
-                    self.samples.append((img_path, label))
-
-    def __len__(self):
-        return len(self.samples)
-
-    def __getitem__(self, idx):
-        path, label = self.samples[idx]
-        img = Image.open(path).convert("RGB")
-        if self.transform:
-            img = self.transform(img)
-        return img, label
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import lit
 
 
-# ── Feature extractor ────────────────────────────────────────────────────────
+spark = SparkSession.builder.getOrCreate()
+
+
+# ── Config ─────────────────────────────────────────────
+
+BASE_PATH = "/Workspace/Users/na24b007@smail.iitm.ac.in/submission/data"
+
+LOCAL_MODEL_DIR = "/Workspace/Users/na24b007@smail.iitm.ac.in/submission/models"
+os.makedirs(LOCAL_MODEL_DIR, exist_ok=True)
+
+
+CLASSES = [
+    "glioma_tumor",
+    "meningioma_tumor",
+    "no_tumor",
+    "pituitary_tumor",
+]
+
+IMG_SIZE = 224
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+# ── Step 1: Bronze Delta Table ──────────────────────────
+
+def create_bronze_table():
+    import os
+
+    # IMPORTANT: local path, not file:/ path
+    LOCAL_BASE_PATH = "/Workspace/Users/na24b007@smail.iitm.ac.in/submission/data"
+
+    rows = []
+
+    for split in ["Training", "Testing"]:
+        for label_id, cls in enumerate(CLASSES):
+            folder = os.path.join(LOCAL_BASE_PATH, split, cls)
+
+            print("Reading:", folder)
+
+            for filename in os.listdir(folder):
+                if filename.lower().endswith((".jpg", ".jpeg", ".png")):
+                    img_path = os.path.join(folder, filename)
+
+                    with open(img_path, "rb") as f:
+                        content = f.read()
+
+                    rows.append({
+                        "path": img_path,
+                        "content": bytearray(content),
+                        "split": split,
+                        "label_name": cls,
+                        "label": label_id
+                    })
+
+    bronze_df = spark.createDataFrame(rows)
+
+    bronze_df.write.format("delta").mode("overwrite").saveAsTable(
+        "brain_tumor_bronze_images"
+    )
+
+    print("Bronze table created: brain_tumor_bronze_images")
+    print("Total images:", bronze_df.count())
+# ── Step 2: EfficientNet Feature Extractor ──────────────
+
 def build_extractor():
-    """EfficientNetB0 with the classifier head removed — outputs 1280-d features."""
-    backbone = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1)
-    backbone.classifier = nn.Identity()   # strip the head
-    backbone.eval()
-    return backbone.to(DEVICE)
+    model = models.efficientnet_b0(
+        weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1
+    )
+    model.classifier = nn.Identity()
+    model.eval()
+    return model.to(DEVICE)
 
 
-def extract_features(loader, model):
-    features, labels = [], []
-    with torch.no_grad():
-        for imgs, lbls in loader:
-            imgs = imgs.to(DEVICE)
-            feats = model(imgs).cpu().numpy()
-            features.append(feats)
-            labels.extend(lbls.numpy())
-    return np.vstack(features), np.array(labels)
+transform = transforms.Compose([
+    transforms.Resize((IMG_SIZE, IMG_SIZE)),
+    transforms.ToTensor(),
+    transforms.Normalize(
+        [0.485, 0.456, 0.406],
+        [0.229, 0.224, 0.225]
+    ),
+])
 
 
-# ── Main ─────────────────────────────────────────────────────────────────────
-def main():
-    transform = transforms.Compose([
-        transforms.Resize((IMG_SIZE, IMG_SIZE)),
-        transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406],
-                             [0.229, 0.224, 0.225]),
-    ])
+def image_bytes_to_tensor(image_bytes):
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    img = transform(img)
+    return img.unsqueeze(0)
 
-    print("Loading datasets …")
-    train_ds = BrainTumorDataset(TRAIN_DIR, transform)
-    test_ds  = BrainTumorDataset(TEST_DIR,  transform)
-    print(f"  Train: {len(train_ds)} images  |  Test: {len(test_ds)} images")
 
-    train_loader = DataLoader(train_ds,batch_size=16,num_workers=0,pin_memory=False)
-    test_loader = DataLoader(test_ds, batch_size = 16, num_workers = 0, pin_memory = False)
-    # ── Feature extraction ───────────────────────────────────────────────────
-    print(f"\nExtracting features with EfficientNetB0 on {DEVICE} …")
+# ── Step 3: Silver Delta Table ──────────────────────────
+
+def create_silver_features():
     extractor = build_extractor()
 
-    X_train, y_train = extract_features(train_loader, extractor)
-    X_test,  y_test  = extract_features(test_loader,  extractor)
-    print(f"  Feature shape — train: {X_train.shape}  test: {X_test.shape}")
+    bronze_df = spark.table("brain_tumor_bronze_images")
 
-    np.save(MODEL_DIR / "X_train.npy", X_train)
-    np.save(MODEL_DIR / "y_train.npy", y_train)
-    np.save(MODEL_DIR / "X_test.npy",  X_test)
-    np.save(MODEL_DIR / "y_test.npy",  y_test)
+    rows = (
+        bronze_df
+        .select("path", "content", "split", "label_name", "label")
+        .collect()
+    )
 
-    # ── XGBoost training ─────────────────────────────────────────────────────
-    print("\nTraining XGBoost classifier …")
+    feature_rows = []
+
+    print("Extracting features on:", DEVICE)
+
+    with torch.no_grad():
+        for i, row in enumerate(rows):
+            img_tensor = image_bytes_to_tensor(row["content"]).to(DEVICE)
+
+            features = extractor(img_tensor)
+            features = features.cpu().numpy().flatten()
+
+            feature_rows.append({
+                "path": row["path"],
+                "split": row["split"],
+                "label_name": row["label_name"],
+                "label": int(row["label"]),
+                "features": features.tolist()
+            })
+
+            if (i + 1) % 100 == 0:
+                print(f"Processed {i + 1}/{len(rows)} images")
+
+    features_pdf = pd.DataFrame(feature_rows)
+
+    silver_df = spark.createDataFrame(features_pdf)
+
+    silver_df.write.format("delta").mode("overwrite").saveAsTable(
+        "brain_tumor_silver_features"
+    )
+
+    print("Silver table created: brain_tumor_silver_features")
+
+
+# ── Step 4: Train XGBoost + Gold Delta Tables ───────────
+
+def train_model():
+    silver_df = spark.table("brain_tumor_silver_features")
+    pdf = silver_df.toPandas()
+
+    train_pdf = pdf[pdf["split"] == "Training"]
+    test_pdf = pdf[pdf["split"] == "Testing"]
+
+    X_train = np.array(train_pdf["features"].tolist())
+    y_train = train_pdf["label"].values
+
+    X_test = np.array(test_pdf["features"].tolist())
+    y_test = test_pdf["label"].values
+
+    print("Train shape:", X_train.shape)
+    print("Test shape:", X_test.shape)
+
     clf = xgb.XGBClassifier(
         n_estimators=500,
         max_depth=6,
         learning_rate=0.05,
         subsample=0.8,
         colsample_bytree=0.8,
-        use_label_encoder=False,
         eval_metric="mlogloss",
-        early_stopping_rounds=30,
-        tree_method="hist",          # fast on CPU; set to "gpu_hist" if CUDA available
-        device=DEVICE if DEVICE == "cuda" else "cpu",
+        tree_method="hist",
         random_state=42,
         n_jobs=-1,
     )
 
     clf.fit(
-        X_train, y_train,
+        X_train,
+        y_train,
         eval_set=[(X_test, y_test)],
-        verbose=50,
+        verbose=50
     )
 
-    joblib.dump(clf, MODEL_DIR / "xgb_brain_tumor.pkl")
-    print("  Model saved to /tmp/models/xgb_brain_tumor.pkl")
+    model_path = os.path.join(
+        LOCAL_MODEL_DIR,
+        "xgb_brain_tumor_delta.pkl"
+    )
 
-    # ── Evaluation ───────────────────────────────────────────────────────────
+    joblib.dump(clf, model_path)
+
+    print("Model saved to:")
+    print(model_path)
+
     y_pred = clf.predict(X_test)
+    probs = clf.predict_proba(X_test)
+
     acc = accuracy_score(y_test, y_pred)
-    print(f"\nTest Accuracy: {acc:.4f}")
+
+    print("\nAccuracy:", acc)
     print("\nClassification Report:")
     print(classification_report(y_test, y_pred, target_names=CLASSES))
 
-    # Confusion matrix
-    cm = confusion_matrix(y_test, y_pred)
-    plt.figure(figsize=(7, 6))
-    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
-                xticklabels=CLASSES, yticklabels=CLASSES)
-    plt.title(f"Confusion Matrix — Test Accuracy: {acc:.2%}")
-    plt.ylabel("True label")
-    plt.xlabel("Predicted label")
-    plt.tight_layout()
-    plt.savefig(MODEL_DIR / "confusion_matrix.png", dpi=150)
-    print("  Confusion matrix saved to models/confusion_matrix.png")
+    pred_rows = []
 
-    # Feature importance (top 20)
-    importances = clf.feature_importances_
-    top_idx = np.argsort(importances)[-20:]
-    plt.figure(figsize=(8, 5))
-    plt.barh(range(20), importances[top_idx])
-    plt.yticks(range(20), [f"feat_{i}" for i in top_idx])
-    plt.title("Top-20 Feature Importances (XGBoost)")
-    plt.tight_layout()
-    plt.savefig(MODEL_DIR / "feature_importance.png", dpi=150)
-    print("  Feature importance plot saved to models/feature_importance.png")
+    for i in range(len(test_pdf)):
+        pred_rows.append({
+            "path": test_pdf.iloc[i]["path"],
+            "true_label": int(y_test[i]),
+            "true_class": CLASSES[int(y_test[i])],
+            "predicted_label": int(y_pred[i]),
+            "predicted_class": CLASSES[int(y_pred[i])],
+            "confidence": float(np.max(probs[i])),
+            "correct": bool(y_test[i] == y_pred[i])
+        })
+
+    pred_pdf = pd.DataFrame(pred_rows)
+
+    spark.createDataFrame(pred_pdf) \
+        .write.format("delta") \
+        .mode("overwrite") \
+        .saveAsTable("brain_tumor_gold_predictions")
+
+    metrics_pdf = pd.DataFrame([{
+        "accuracy": float(acc),
+        "model": "EfficientNetB0 + XGBoost",
+        "model_path": model_path,
+        "bronze_table": "brain_tumor_bronze_images",
+        "silver_table": "brain_tumor_silver_features",
+        "gold_table": "brain_tumor_gold_predictions"
+    }])
+
+    spark.createDataFrame(metrics_pdf) \
+        .write.format("delta") \
+        .mode("overwrite") \
+        .saveAsTable("brain_tumor_gold_metrics")
+
+    print("Gold tables created:")
+    print("brain_tumor_gold_predictions")
+    print("brain_tumor_gold_metrics")
 
 
-if __name__ == "__main__":
-    main()
+# ── Run Pipeline ────────────────────────────────────────
+
+create_bronze_table()
+create_silver_features()
+train_model()
